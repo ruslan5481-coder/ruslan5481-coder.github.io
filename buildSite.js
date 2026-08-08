@@ -7,7 +7,10 @@ const path = require('path');
 const { RECIPES_DIR } = require('./pipeline');
 
 const DOCS_DIR = path.join(__dirname, 'docs');
-const SITE_URL = 'https://ruslan5481-coder.github.io/recipe-finder';
+// Репозиторий назван ровно "ruslan5481-coder.github.io" — GitHub публикует такой
+// репозиторий в корне домена (без /recipe-finder/ в адресе), это нужно Дзену,
+// который принимает в поле "Домен" только чистый хост, без пути.
+const SITE_URL = 'https://ruslan5481-coder.github.io';
 
 function esc(s) {
   return String(s)
