@@ -53,9 +53,15 @@ function cleanTitleForDzen(title) {
   return t;
 }
 
+// Старые рецепты (до перехода на лайфхаки) хранят подтверждённую лицензию текста
+// (sourceMeta.license) — для них показываем её как раньше. Новые советы лицензию
+// текста не проверяют (сам совет — факт, не объект авторского права), поэтому
+// просто указывают источник.
 function attributionHtml(recipe) {
   const src = recipe.sourceMeta;
-  const lines = [`<p>Текст адаптирован по материалам: <a href="${esc(src.url)}">${esc(src.url)}</a> (${esc(src.license)}).</p>`];
+  const lines = src.license
+    ? [`<p>Текст адаптирован по материалам: <a href="${esc(src.url)}">${esc(src.url)}</a> (${esc(src.license)}).</p>`]
+    : [`<p>Источник: <a href="${esc(src.url)}">${esc(src.url)}</a>${src.author ? ', автор: ' + esc(src.author) : ''}.</p>`];
   if (recipe.image) {
     const landing = recipe.image.foreignLandingUrl || recipe.image.url;
     lines.push(
@@ -67,6 +73,8 @@ function attributionHtml(recipe) {
 
 // forFeed=true — в RSS картинка идёт только если проходит по минимальному
 // размеру Дзена; на обычной странице сайта такого ограничения нет.
+// type: 'tip' (лайфхаки, текущий формат) — просто текст совета; старые записи
+// без type — рецепты с ингредиентами/шагами (формат до перехода на лайфхаки).
 function renderRecipeBody(recipe, { forFeed }) {
   const parts = [];
   const showImage = recipe.image && (!forFeed || imageMeetsMinSize(recipe.image));
@@ -77,11 +85,15 @@ function renderRecipeBody(recipe, { forFeed }) {
     );
   }
 
-  parts.push(`<p>${esc(recipe.intro)}</p>`);
-  parts.push('<h2>Ингредиенты</h2>');
-  parts.push('<ul>' + recipe.ingredients.map((i) => `<li>${esc(i)}</li>`).join('') + '</ul>');
-  parts.push('<h2>Приготовление</h2>');
-  parts.push('<ol>' + recipe.steps.map((s) => `<li>${esc(s)}</li>`).join('') + '</ol>');
+  if (recipe.type === 'tip') {
+    parts.push(`<p>${esc(recipe.body)}</p>`);
+  } else {
+    parts.push(`<p>${esc(recipe.intro)}</p>`);
+    parts.push('<h2>Ингредиенты</h2>');
+    parts.push('<ul>' + recipe.ingredients.map((i) => `<li>${esc(i)}</li>`).join('') + '</ul>');
+    parts.push('<h2>Приготовление</h2>');
+    parts.push('<ol>' + recipe.steps.map((s) => `<li>${esc(s)}</li>`).join('') + '</ol>');
+  }
   parts.push(attributionHtml(recipe));
 
   return parts.join('\n');
@@ -98,7 +110,7 @@ function renderRecipePage(recipe) {
 <body>
 <h1>${esc(recipe.title)}</h1>
 ${renderRecipeBody(recipe, { forFeed: false })}
-<p><a href="../index.html">&larr; Все рецепты</a></p>
+<p><a href="../index.html">&larr; На главную</a></p>
 </body>
 </html>
 `;
@@ -134,9 +146,9 @@ function renderFeed(recipes) {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <rss xmlns:media="https://search.yahoo.com/mrss/" xmlns:content="http://purl.org/rss/1.0/modules/content/" version="2.0">
 <channel>
-<title>Простые рецепты</title>
+<title>Понятная еда</title>
 <link>${SITE_URL}/</link>
-<description>Простые рецепты без сложных ингредиентов</description>
+<description>Простые кулинарные лайфхаки и советы</description>
 <language>ru</language>
 ${items}
 </channel>
@@ -153,10 +165,10 @@ function renderIndex(recipes) {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Простые рецепты</title>
+<title>Понятная еда</title>
 </head>
 <body>
-<h1>Простые рецепты</h1>
+<h1>Понятная еда</h1>
 <p><a href="feed.xml">RSS-лента</a></p>
 <ul>
 ${items}
@@ -188,7 +200,7 @@ function buildSite() {
   fs.writeFileSync(path.join(DOCS_DIR, 'feed.xml'), renderFeed(recipes), 'utf-8');
   fs.writeFileSync(path.join(DOCS_DIR, 'index.html'), renderIndex(recipes), 'utf-8');
 
-  console.log(`Сайт собран: ${recipes.length} рецепт(ов) → docs/`);
+  console.log(`Сайт собран: ${recipes.length} публикаци(й) → docs/`);
 }
 
 buildSite();

@@ -3,7 +3,7 @@ const path = require('path');
 const { pathToFileURL } = require('url');
 const { mdToPdf } = require('md-to-pdf');
 const { runClaude, extractJson } = require('./agents/runClaude');
-const { finderPrompt, fetchAndVerifyPrompt, writerPrompt } = require('./agents/prompts');
+const { finderPrompt, extractPrompt } = require('./agents/prompts');
 const { findImage } = require('./agents/openverse');
 const { watermarkImage } = require('./agents/watermark');
 const sharp = require('sharp');
@@ -13,21 +13,8 @@ const RECIPES_DIR = path.join(__dirname, 'recipes');
 const IMAGES_DIR = path.join(RECIPES_DIR, 'images');
 const CHANNEL_NAME = 'Понятная еда';
 
-// Источники с заведомо известной открытой лицензией — для них проверка лицензии
-// на странице не нужна. Список легко расширяется.
-const TRUSTED_DOMAINS = ['ru.wikibooks.org'];
-
 function slugify(text) {
   return String(text).replace(/[^\p{L}\p{N}]+/gu, '_').slice(0, 50);
-}
-
-function isTrusted(url) {
-  try {
-    const hostname = new URL(url).hostname.replace(/^www\./, '');
-    return TRUSTED_DOMAINS.includes(hostname);
-  } catch (e) {
-    return false;
-  }
 }
 
 // Скачивает найденное (уже лицензионно чистое) фото и накладывает водяной знак
@@ -58,24 +45,22 @@ function imageMarkdownSrc(image) {
   return image.url;
 }
 
-function renderRecipeMarkdown(recipe, image, sourceMeta) {
-  const lines = [`# ${recipe.title}`, ''];
+function renderTipMarkdown(tip, image, sourceMeta) {
+  const lines = [`# ${tip.title}`, ''];
+
+  const authorPart = sourceMeta.author ? `, автор: ${sourceMeta.author}` : '';
+  lines.push(`Источник: [${sourceMeta.url}](${sourceMeta.url})${authorPart}.`, '');
 
   if (image) {
-    lines.push(`![${recipe.title}](${imageMarkdownSrc(image)})`, '');
+    lines.push(`![${tip.title}](${imageMarkdownSrc(image)})`, '');
     const lic = `${image.license.toUpperCase()}${image.licenseVersion ? ' ' + image.licenseVersion : ''}`;
     lines.push(`*Фото: ${image.creator} — ${lic}*`, '');
   }
 
-  lines.push(recipe.intro, '');
-  lines.push('## Ингредиенты');
-  recipe.ingredients.forEach((i) => lines.push(`- ${i}`));
-  lines.push('');
-  lines.push('## Приготовление');
-  recipe.steps.forEach((s, idx) => lines.push(`${idx + 1}. ${s}`));
-  lines.push('', '---');
-  lines.push(`Текст адаптирован по материалам: [${sourceMeta.url}](${sourceMeta.url}) (${sourceMeta.license}).`);
+  lines.push(tip.body);
+
   if (image) {
+    lines.push('', '---');
     const lic = `${image.license.toUpperCase()}${image.licenseVersion ? ' ' + image.licenseVersion : ''}`;
     const landing = image.foreignLandingUrl || image.url;
     lines.push(`Фото: [${landing}](${landing}), автор ${image.creator}, ${lic}.`);
@@ -84,10 +69,10 @@ function renderRecipeMarkdown(recipe, image, sourceMeta) {
   return lines.join('\n');
 }
 
-// Прогоняет пайплайн (finder → [trusted-check →] fetch-and-verify → writer →
-// image-picker → pdf-export) для категории рецептов. onProgress({ stage, status,
-// ... }) вызывается на границах шагов — по одному кандидату за раз, без
-// параллелизма, чтобы не перегружать `claude` CLI и не усложнять логику.
+// Прогоняет пайплайн (finder → extract → image-picker → pdf-export) для
+// категории рецептов. onProgress({ stage, status, ... }) вызывается на границах
+// шагов — по одному кандидату за раз, без параллелизма, чтобы не перегружать
+// `claude` CLI и не усложнять логику.
 async function runPipeline(category, count, { onProgress = () => {} } = {}) {
   if (!category || !category.trim()) {
     throw new Error('Категория не указана.');
@@ -112,78 +97,50 @@ async function runPipeline(category, count, { onProgress = () => {} } = {}) {
   for (const candidate of candidates) {
     if (published.length >= wantCount) break;
 
-    const trusted = isTrusted(candidate.url);
-
     try {
-      // 2. fetch-and-verify (для недоверенных — вердикт по лицензии + рецепт за один вызов)
-      onProgress({ stage: 'license-check', status: trusted ? 'skipped' : 'running', item: candidate.title });
-      const verifyText = await runClaude(
-        fetchAndVerifyPrompt(candidate.url, { requireLicenseCheck: !trusted }),
-        { label: 'fetch-and-verify', allowedTools: ['WebFetch'] }
-      );
-      const verified = extractJson(verifyText);
-
-      if (!trusted && verified.licensed !== true) {
-        onProgress({
-          stage: 'license-check',
-          status: 'rejected',
-          item: candidate.title,
-          reason: 'не найдена явная пометка об открытой лицензии',
-        });
-        rejected.push({ title: candidate.title, url: candidate.url, reason: 'лицензия не подтверждена' });
-        continue;
-      }
-      onProgress({
-        stage: 'license-check',
-        status: trusted ? 'skipped' : 'done',
-        item: candidate.title,
-        license: trusted ? 'доверенный источник' : verified.license,
+      // 2. extract — только факт (сам совет, автор), без пересказа и без
+      // вступления от себя. Лицензия источника тут не нужна: практический
+      // приём/факт сам по себе не является объектом авторского права.
+      onProgress({ stage: 'extract', status: 'running', item: candidate.title });
+      const extractText = await runClaude(extractPrompt(candidate.url), {
+        label: 'extract',
+        allowedTools: ['WebFetch'],
       });
+      const extracted = extractJson(extractText);
+      onProgress({ stage: 'extract', status: 'done', item: candidate.title });
 
-      const sourceMeta = {
-        url: candidate.url,
-        author: verified.author || null,
-        license: trusted ? 'доверенный источник (ru.wikibooks.org и т.п.)' : verified.license,
-        evidence: verified.evidence || null,
-      };
+      const sourceMeta = { url: candidate.url, author: extracted.author || null };
 
-      const sourceSlug = slugify(verified.title || candidate.title);
+      const sourceSlug = slugify(extracted.title || candidate.title);
       fs.writeFileSync(
         path.join(SOURCES_DIR, `${sourceSlug}.json`),
-        JSON.stringify({ ...verified, ...sourceMeta }, null, 2),
+        JSON.stringify({ ...extracted, ...sourceMeta }, null, 2),
         'utf-8'
       );
-      onProgress({ stage: 'fetcher', status: 'done', item: candidate.title, artifact: `sources/${sourceSlug}.json` });
 
-      // 3. writer
-      onProgress({ stage: 'writer', status: 'running', item: candidate.title });
-      const writerText = await runClaude(writerPrompt(verified), { label: 'writer' });
-      const rewritten = extractJson(writerText);
-      onProgress({ stage: 'writer', status: 'done', item: candidate.title });
-
-      // 4. image-picker (обычный код, без LLM). Фото обязательно — без него
-      // рецепт не публикуется, как и при непройденной проверке лицензии.
+      // 3. image-picker (обычный код, без LLM). Фото обязательно — без него
+      // совет не публикуется.
       onProgress({ stage: 'image', status: 'running', item: candidate.title });
-      const image = await findImage(rewritten.imageQuery || rewritten.title || candidate.title);
+      const image = await findImage(extracted.imageQuery || extracted.title || candidate.title);
       if (!image) {
         onProgress({ stage: 'image', status: 'rejected', item: candidate.title, reason: 'фото не найдено' });
         rejected.push({ title: candidate.title, url: candidate.url, reason: 'не найдено фото для публикации' });
         continue;
       }
-      const recipeSlug = slugify(rewritten.title || candidate.title);
-      const watermarked = await watermarkAndSave(image, recipeSlug);
+      const tipSlug = slugify(extracted.title || candidate.title);
+      const watermarked = await watermarkAndSave(image, tipSlug);
       const finalImage = watermarked ? { ...image, ...watermarked } : image;
       onProgress({ stage: 'image', status: 'done', item: candidate.title, watermarked: Boolean(watermarked) });
 
-      // 5. pdf-export
-      const markdown = renderRecipeMarkdown(rewritten, finalImage, sourceMeta);
-      const mdFile = `${recipeSlug}.md`;
+      // 4. pdf-export
+      const markdown = renderTipMarkdown(extracted, finalImage, sourceMeta);
+      const mdFile = `${tipSlug}.md`;
       fs.writeFileSync(path.join(RECIPES_DIR, mdFile), markdown, 'utf-8');
 
       let pdfFile = null;
       let pdfError = null;
       try {
-        pdfFile = `${recipeSlug}.pdf`;
+        pdfFile = `${tipSlug}.pdf`;
         await mdToPdf({ content: markdown }, { dest: path.join(RECIPES_DIR, pdfFile) });
       } catch (e) {
         pdfFile = null;
@@ -194,16 +151,17 @@ async function runPipeline(category, count, { onProgress = () => {} } = {}) {
 
       // Метаданные для сборки сайта/RSS-ленты (buildSite.js). pubDate фиксируется
       // один раз здесь и больше не меняется — иначе при каждой пересборке сайта
-      // Дзен будет видеть рецепт как "только что опубликованный".
+      // Дзен будет видеть публикацию как "только что вышедшую". type: 'tip'
+      // отличает новый формат от старых рецептов (с ingredients/steps),
+      // buildSite.js рендерит их по-разному.
       fs.writeFileSync(
-        path.join(RECIPES_DIR, `${recipeSlug}.json`),
+        path.join(RECIPES_DIR, `${tipSlug}.json`),
         JSON.stringify(
           {
-            slug: recipeSlug,
-            title: rewritten.title,
-            intro: rewritten.intro,
-            ingredients: rewritten.ingredients,
-            steps: rewritten.steps,
+            slug: tipSlug,
+            type: 'tip',
+            title: extracted.title,
+            body: extracted.body,
             image: finalImage,
             sourceMeta,
             category,
@@ -215,7 +173,7 @@ async function runPipeline(category, count, { onProgress = () => {} } = {}) {
         'utf-8'
       );
 
-      published.push({ title: rewritten.title, mdFile, pdfFile, hasImage: !!image });
+      published.push({ title: extracted.title, mdFile, pdfFile, hasImage: !!image });
     } catch (e) {
       onProgress({ stage: 'candidate', status: 'error', item: candidate.title, message: e.message });
       rejected.push({ title: candidate.title, url: candidate.url, reason: `техническая ошибка: ${e.message}` });

@@ -16,14 +16,8 @@ function cliProgress(event) {
     console.log(`  → finder нашёл кандидатов: ${event.candidatesFound}`);
     return;
   }
-  if (stage === 'license-check') {
-    if (status === 'skipped') console.log(`  [${item}] источник доверенный — проверка лицензии пропущена`);
-    if (status === 'done') console.log(`  [${item}] лицензия подтверждена: ${event.license}`);
-    if (status === 'rejected') console.log(`  [${item}] ОТКЛОНЁН: ${event.reason}`);
-    return;
-  }
-  if (stage === 'fetcher' && status === 'done') {
-    console.log(`  [${item}] → исходник сохранён: ${event.artifact}`);
+  if (stage === 'extract' && status === 'done') {
+    console.log(`  [${item}] → факты извлечены`);
     return;
   }
   if (stage === 'image') {
@@ -48,12 +42,12 @@ function cliProgress(event) {
 async function main() {
   const { count, category } = parseArgs(process.argv.slice(2));
   if (!category) {
-    console.error('Использование: node index.js [количество] "категория рецептов"');
-    console.error('Пример: node index.js 5 "простые завтраки"');
+    console.error('Использование: node index.js [количество] "тема лайфхаков"');
+    console.error('Пример: node index.js 5 "хранение продуктов"');
     process.exit(1);
   }
 
-  console.log(`=== recipe-finder ===\nКатегория: "${category}", нужно рецептов: ${count}`);
+  console.log(`=== recipe-finder ===\nТема: "${category}", нужно советов: ${count}`);
 
   const summary = await runPipeline(category, count, { onProgress: cliProgress });
 
