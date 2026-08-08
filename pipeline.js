@@ -128,10 +128,16 @@ async function runPipeline(category, count, { onProgress = () => {} } = {}) {
       const rewritten = extractJson(writerText);
       onProgress({ stage: 'writer', status: 'done', item: candidate.title });
 
-      // 4. image-picker (обычный код, без LLM)
+      // 4. image-picker (обычный код, без LLM). Фото обязательно — без него
+      // рецепт не публикуется, как и при непройденной проверке лицензии.
       onProgress({ stage: 'image', status: 'running', item: candidate.title });
-      const image = await findImage(rewritten.title || candidate.title);
-      onProgress({ stage: 'image', status: image ? 'done' : 'none', item: candidate.title });
+      const image = await findImage(rewritten.imageQuery || rewritten.title || candidate.title);
+      if (!image) {
+        onProgress({ stage: 'image', status: 'rejected', item: candidate.title, reason: 'фото не найдено' });
+        rejected.push({ title: candidate.title, url: candidate.url, reason: 'не найдено фото для публикации' });
+        continue;
+      }
+      onProgress({ stage: 'image', status: 'done', item: candidate.title });
 
       // 5. pdf-export
       const markdown = renderRecipeMarkdown(rewritten, image, sourceMeta);

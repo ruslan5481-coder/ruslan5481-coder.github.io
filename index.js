@@ -28,7 +28,7 @@ function cliProgress(event) {
   }
   if (stage === 'image') {
     if (status === 'done') console.log(`  [${item}] → фото найдено (Openverse)`);
-    if (status === 'none') console.log(`  [${item}] → фото не найдено, публикуем без изображения`);
+    if (status === 'rejected') console.log(`  [${item}] ОТКЛОНЁН: ${event.reason}`);
     return;
   }
   if (stage === 'pdf' && status === 'done') {

@@ -19,7 +19,17 @@
     "Варите на слабом огне 25-30 минут, пока картофель не станет мягким.",
     "Перед подачей посыпьте суп рубленым укропом или петрушкой."
   ],
-  "image": null,
+  "image": {
+    "url": "https://live.staticflickr.com/2318/2238550149_18112793a3_b.jpg",
+    "creator": "Average Jane",
+    "creatorUrl": "https://www.flickr.com/photos/64401168@N00",
+    "license": "by",
+    "licenseVersion": "2.0",
+    "licenseUrl": "https://creativecommons.org/licenses/by/2.0/",
+    "foreignLandingUrl": "https://www.flickr.com/photos/64401168@N00/2238550149",
+    "width": 1024,
+    "height": 768
+  },
   "sourceMeta": {
     "url": "https://ru.wikibooks.org/wiki/Рецепт:Картофельный_суп",
     "author": "Книга о вкусной и здоровой пище (1952)",
