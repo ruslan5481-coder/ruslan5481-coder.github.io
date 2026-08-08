@@ -1,12 +1,17 @@
 const fs = require('fs');
 const path = require('path');
+const { pathToFileURL } = require('url');
 const { mdToPdf } = require('md-to-pdf');
 const { runClaude, extractJson } = require('./agents/runClaude');
 const { finderPrompt, fetchAndVerifyPrompt, writerPrompt } = require('./agents/prompts');
 const { findImage } = require('./agents/openverse');
+const { watermarkImage } = require('./agents/watermark');
+const sharp = require('sharp');
 
 const SOURCES_DIR = path.join(__dirname, 'sources');
 const RECIPES_DIR = path.join(__dirname, 'recipes');
+const IMAGES_DIR = path.join(RECIPES_DIR, 'images');
+const CHANNEL_NAME = 'Понятная еда';
 
 // Источники с заведомо известной открытой лицензией — для них проверка лицензии
 // на странице не нужна. Список легко расширяется.
@@ -25,11 +30,39 @@ function isTrusted(url) {
   }
 }
 
+// Скачивает найденное (уже лицензионно чистое) фото и накладывает водяной знак
+// с названием канала. Если скачать/обработать не получилось — публикация не
+// срывается, просто используется оригинальная ссылка без знака.
+async function watermarkAndSave(image, slug) {
+  try {
+    const res = await fetch(image.url);
+    if (!res.ok) return null;
+    const buffer = Buffer.from(await res.arrayBuffer());
+    const watermarked = await watermarkImage(buffer, CHANNEL_NAME);
+    const dims = await sharp(watermarked).metadata();
+
+    fs.mkdirSync(IMAGES_DIR, { recursive: true });
+    const localFile = `${slug}.jpg`;
+    fs.writeFileSync(path.join(IMAGES_DIR, localFile), watermarked);
+
+    return { localFile, width: dims.width, height: dims.height };
+  } catch (e) {
+    return null;
+  }
+}
+
+function imageMarkdownSrc(image) {
+  if (image.localFile) {
+    return pathToFileURL(path.join(IMAGES_DIR, image.localFile)).href;
+  }
+  return image.url;
+}
+
 function renderRecipeMarkdown(recipe, image, sourceMeta) {
   const lines = [`# ${recipe.title}`, ''];
 
   if (image) {
-    lines.push(`![${recipe.title}](${image.url})`, '');
+    lines.push(`![${recipe.title}](${imageMarkdownSrc(image)})`, '');
     const lic = `${image.license.toUpperCase()}${image.licenseVersion ? ' ' + image.licenseVersion : ''}`;
     lines.push(`*Фото: ${image.creator} — ${lic}*`, '');
   }
@@ -137,11 +170,13 @@ async function runPipeline(category, count, { onProgress = () => {} } = {}) {
         rejected.push({ title: candidate.title, url: candidate.url, reason: 'не найдено фото для публикации' });
         continue;
       }
-      onProgress({ stage: 'image', status: 'done', item: candidate.title });
+      const recipeSlug = slugify(rewritten.title || candidate.title);
+      const watermarked = await watermarkAndSave(image, recipeSlug);
+      const finalImage = watermarked ? { ...image, ...watermarked } : image;
+      onProgress({ stage: 'image', status: 'done', item: candidate.title, watermarked: Boolean(watermarked) });
 
       // 5. pdf-export
-      const markdown = renderRecipeMarkdown(rewritten, image, sourceMeta);
-      const recipeSlug = slugify(rewritten.title || candidate.title);
+      const markdown = renderRecipeMarkdown(rewritten, finalImage, sourceMeta);
       const mdFile = `${recipeSlug}.md`;
       fs.writeFileSync(path.join(RECIPES_DIR, mdFile), markdown, 'utf-8');
 
@@ -169,7 +204,7 @@ async function runPipeline(category, count, { onProgress = () => {} } = {}) {
             intro: rewritten.intro,
             ingredients: rewritten.ingredients,
             steps: rewritten.steps,
-            image,
+            image: finalImage,
             sourceMeta,
             category,
             pubDate: new Date().toISOString(),
@@ -192,4 +227,4 @@ async function runPipeline(category, count, { onProgress = () => {} } = {}) {
   return summary;
 }
 
-module.exports = { runPipeline, SOURCES_DIR, RECIPES_DIR };
+module.exports = { runPipeline, SOURCES_DIR, RECIPES_DIR, IMAGES_DIR, CHANNEL_NAME };

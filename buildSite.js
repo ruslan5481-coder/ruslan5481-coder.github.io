@@ -4,9 +4,10 @@
 // GitHub Pages, ленту дальше подключают в настройках канала Дзена вручную.
 const fs = require('fs');
 const path = require('path');
-const { RECIPES_DIR } = require('./pipeline');
+const { RECIPES_DIR, IMAGES_DIR } = require('./pipeline');
 
 const DOCS_DIR = path.join(__dirname, 'docs');
+const DOCS_IMAGES_DIR = path.join(DOCS_DIR, 'images');
 // Репозиторий назван ровно "ruslan5481-coder.github.io" — GitHub публикует такой
 // репозиторий в корне домена (без /recipe-finder/ в адресе), это нужно Дзену,
 // который принимает в поле "Домен" только чистый хост, без пути.
@@ -34,6 +35,13 @@ function imageMimeType(url) {
   if (ext === 'png') return 'image/png';
   if (ext === 'gif') return 'image/gif';
   return 'image/jpeg';
+}
+
+// Если фото прошло через водяной знак — оно уже лежит локально в docs/images/
+// (см. buildSite ниже), иначе используем оригинальную ссылку на Openverse.
+function imageSiteUrl(image) {
+  if (!image) return null;
+  return image.localFile ? `${SITE_URL}/images/${encodeURIComponent(image.localFile)}` : image.url;
 }
 
 // В RSS ≤80 симв., без КАПСА-эмоций/точки в конце/эмодзи — сама HTML-страница
@@ -65,7 +73,7 @@ function renderRecipeBody(recipe, { forFeed }) {
 
   if (showImage) {
     parts.push(
-      `<figure><img src="${esc(recipe.image.url)}" alt="${esc(recipe.title)}"><figcaption>Фото: ${esc(recipe.image.creator)} — ${esc(licenseLabel(recipe.image))}</figcaption></figure>`
+      `<figure><img src="${esc(imageSiteUrl(recipe.image))}" alt="${esc(recipe.title)}"><figcaption>Фото: ${esc(recipe.image.creator)} — ${esc(licenseLabel(recipe.image))}</figcaption></figure>`
     );
   }
 
@@ -106,8 +114,9 @@ function renderFeedItem(recipe) {
   const link = recipeUrl(recipe);
   const pubDate = new Date(recipe.pubDate).toUTCString();
   const body = renderRecipeBody(recipe, { forFeed: true });
+  const imgUrl = imageSiteUrl(recipe.image);
   const enclosure = imageMeetsMinSize(recipe.image)
-    ? `<enclosure url="${esc(recipe.image.url)}" length="0" type="${imageMimeType(recipe.image.url)}" />\n`
+    ? `<enclosure url="${esc(imgUrl)}" length="0" type="${imageMimeType(imgUrl)}" />\n`
     : '';
 
   return `<item>
@@ -164,9 +173,16 @@ function buildSite() {
     .sort((a, b) => (a.pubDate < b.pubDate ? 1 : -1));
 
   fs.mkdirSync(path.join(DOCS_DIR, 'recipes'), { recursive: true });
+  fs.mkdirSync(DOCS_IMAGES_DIR, { recursive: true });
 
   recipes.forEach((r) => {
     fs.writeFileSync(path.join(DOCS_DIR, 'recipes', `${r.slug}.html`), renderRecipePage(r), 'utf-8');
+    if (r.image && r.image.localFile) {
+      const src = path.join(IMAGES_DIR, r.image.localFile);
+      if (fs.existsSync(src)) {
+        fs.copyFileSync(src, path.join(DOCS_IMAGES_DIR, r.image.localFile));
+      }
+    }
   });
 
   fs.writeFileSync(path.join(DOCS_DIR, 'feed.xml'), renderFeed(recipes), 'utf-8');
